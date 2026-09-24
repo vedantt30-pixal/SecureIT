@@ -1,0 +1,7 @@
+1. Flash ESP32-CAM
+2. Flash ESP8266
+3. Run Server
+npm install
+node server.js
+Server runs on:
+http://localhost:3000

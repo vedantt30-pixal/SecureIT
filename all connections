@@ -1,0 +1,20 @@
+1) Esp32 cam 
+| Component  | Pin     |
+| ---------- | ------- |
+| PIR OUT    | GPIO 13 |
+| Relay IN   | GPIO 12 |
+| DHT11 Data | GPIO 2  |
+| Flash LED  | GPIO 4  |
+| 5V         | 5V      |
+| GND        | GND     |
+
+
+2)ESP8266 
+| Component    | Pin |
+| ------------ | --- |
+| Servo Signal | D6  |
+| Push Button  | D5  |
+| LCD SDA      | D2  |
+| LCD SCL      | D1  |
+| 5V           | VCC |
+| GND          | GND |

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SecureIT Dashboard</title>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+
+    header {
+      padding: 20px;
+      text-align: center;
+      font-size: 24px;
+      background: #1e293b;
+    }
+
+    .container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+      padding: 20px;
+    }
+
+    .card {
+      flex: 1 1 400px;
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 20px;
+    }
+
+    h2 {
+      margin-top: 0;
+      border-bottom: 1px solid #334155;
+      padding-bottom: 10px;
+    }
+
+    iframe {
+      width: 100%;
+      height: 300px;
+      border: none;
+      border-radius: 8px;
+    }
+
+    ul {
+      list-style: none;
+      padding: 0;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    li {
+      padding: 8px;
+      margin-bottom: 6px;
+      border-radius: 6px;
+      background: #334155;
+      font-size: 14px;
+    }
+
+    .granted {
+      color: #22c55e;
+      font-weight: bold;
+    }
+
+    .denied {
+      color: #ef4444;
+      font-weight: bold;
+    }
+
+    footer {
+      text-align: center;
+      padding: 10px;
+      font-size: 12px;
+      opacity: 0.6;
+    }
+  </style>
+</head>
+
+<body>
+
+<header>SecureIT Dashboard</header>
+
+<div class="container">
+
+  <div class="card">
+    <h2>Live Camera</h2>
+    <iframe src="http://YOUR_ESP32_IP/mjpeg"></iframe>
+  </div>
+
+  <div class="card">
+    <h2>Access Logs</h2>
+    <ul id="logs"></ul>
+  </div>
+
+</div>
+
+<footer>SecureIT IoT Security System</footer>
+
+<script>
+  const logContainer = document.getElementById("logs");
+
+  function renderLogs(data) {
+    logContainer.innerHTML = "";
+    data.forEach(log => {
+      const li = document.createElement("li");
+      li.textContent = `${log.timestamp} - ${log.event}`;
+      li.className = log.event === "Access Granted" ? "granted" : "denied";
+      logContainer.appendChild(li);
+    });
+  }
+
+  async function fetchLogs() {
+    try {
+      const res = await fetch("/logs");
+      if (!res.ok) throw new Error("Failed");
+      const data = await res.json();
+      renderLogs(data);
+    } catch (err) {
+      console.error("Log fetch error:", err);
+    }
+  }
+
+  fetchLogs();
+  setInterval(fetchLogs, 5000);
+</script>
+
+</body>
+</html>

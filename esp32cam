@@ -1,0 +1,222 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include "esp_camera.h"
+#include <UniversalTelegramBot.h>
+#include <ArduinoJson.h>
+#include <DHT.h>
+#include <WebServer.h>
+
+// ===== Network =====
+const char* ssid = "YOUR_WIFI";
+const char* password = "YOUR_PASS";
+String BOTtoken = "YOUR_BOT_TOKEN";
+String chatId   = "YOUR_CHAT_ID";
+
+WiFiClientSecure clientTCP;
+UniversalTelegramBot bot(BOTtoken, clientTCP);
+
+// ===== Pins =====
+#define PIR 13
+#define RELAY 12
+#define DHTPIN 2
+#define FLASH_LED 4
+#define DHTTYPE DHT11
+
+DHT dht(DHTPIN, DHTTYPE);
+WebServer server(80);
+
+// ===== State =====
+bool sendPhoto = false;
+bool withFlash = false;
+bool motionEnabled = false;
+
+unsigned long lastMotion = 0;
+const unsigned long motionCooldown = 10000;
+
+unsigned long botLast = 0;
+const unsigned long BOT_MTBS = 5000;
+
+// ===== WiFi =====
+void ensureWiFi() {
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+      delay(500);
+    }
+  }
+}
+
+// ===== Camera =====
+void initCamera() {
+  camera_config_t config;
+
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = 5;
+  config.pin_d1 = 18;
+  config.pin_d2 = 19;
+  config.pin_d3 = 21;
+  config.pin_d4 = 36;
+  config.pin_d5 = 39;
+  config.pin_d6 = 34;
+  config.pin_d7 = 35;
+  config.pin_xclk = 0;
+  config.pin_pclk = 22;
+  config.pin_vsync = 25;
+  config.pin_href = 23;
+  config.pin_sscb_sda = 26;
+  config.pin_sscb_scl = 27;
+  config.pin_pwdn = 32;
+  config.pin_reset = -1;
+
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_QQVGA;
+  config.jpeg_quality = 12;
+  config.fb_count = 1;
+
+  if (esp_camera_init(&config) != ESP_OK) {
+    ESP.restart();
+  }
+}
+
+// ===== Telegram Photo =====
+String sendPhotoTelegram() {
+  if (withFlash) {
+    digitalWrite(FLASH_LED, HIGH);
+    delay(150);
+  }
+
+  camera_fb_t * fb = esp_camera_fb_get();
+  if (!fb) return "Camera error";
+
+  if (!clientTCP.connect("api.telegram.org", 443)) {
+    esp_camera_fb_return(fb);
+    return "Connection failed";
+  }
+
+  String head = "--frame\r\nContent-Disposition: form-data; name=\"chat_id\";\r\n\r\n" +
+                chatId +
+                "\r\n--frame\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"esp.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
+
+  String tail = "\r\n--frame--\r\n";
+  uint32_t len = fb->len + head.length() + tail.length();
+
+  clientTCP.println("POST /bot" + BOTtoken + "/sendPhoto HTTP/1.1");
+  clientTCP.println("Host: api.telegram.org");
+  clientTCP.println("Content-Type: multipart/form-data; boundary=frame");
+  clientTCP.println("Content-Length: " + String(len));
+  clientTCP.println();
+  clientTCP.print(head);
+  clientTCP.write(fb->buf, fb->len);
+  clientTCP.print(tail);
+
+  esp_camera_fb_return(fb);
+  clientTCP.stop();
+
+  if (withFlash) {
+    digitalWrite(FLASH_LED, LOW);
+    withFlash = false;
+  }
+
+  return "Sent";
+}
+
+// ===== Stream =====
+void startStream() {
+  server.on("/stream", HTTP_GET, []() {
+    server.send(200, "text/html", "<img src='/mjpeg'>");
+  });
+
+  server.on("/mjpeg", HTTP_GET, []() {
+    WiFiClient client = server.client();
+    client.print("HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n");
+
+    while (client.connected()) {
+      camera_fb_t * fb = esp_camera_fb_get();
+      if (!fb) continue;
+
+      client.printf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
+      client.write(fb->buf, fb->len);
+      client.print("\r\n");
+
+      esp_camera_fb_return(fb);
+      delay(30);
+      yield();
+    }
+  });
+
+  server.begin();
+}
+
+// ===== Commands =====
+void handleMessages(int n) {
+  for (int i = 0; i < n; i++) {
+    String text = bot.messages[i].text;
+    String id = bot.messages[i].chat_id;
+
+    if (id != chatId) {
+      bot.sendMessage(id, "Unauthorized", "");
+      continue;
+    }
+
+    if (text == "/photo") sendPhoto = true;
+    if (text == "/photoWithFlash") { sendPhoto = true; withFlash = true; }
+    if (text == "/lightOn") digitalWrite(RELAY, HIGH);
+    if (text == "/lightOff") digitalWrite(RELAY, LOW);
+    if (text == "/motionOn") motionEnabled = true;
+    if (text == "/motionOff") motionEnabled = false;
+  }
+}
+
+// ===== Setup =====
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(PIR, INPUT_PULLUP);
+  pinMode(RELAY, OUTPUT);
+  pinMode(FLASH_LED, OUTPUT);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  WiFi.setSleep(false);
+  clientTCP.setInsecure();
+
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+
+  dht.begin();
+  initCamera();
+  startStream();
+
+  bot.sendMessage(chatId, "SecureIT Camera Ready", "");
+}
+
+// ===== Loop =====
+void loop() {
+  ensureWiFi();
+
+  if (motionEnabled && digitalRead(PIR) == LOW) {
+    if (millis() - lastMotion > motionCooldown) {
+      sendPhotoTelegram();
+      lastMotion = millis();
+    }
+  }
+
+  if (sendPhoto) {
+    sendPhotoTelegram();
+    sendPhoto = false;
+  }
+
+  if (millis() - botLast > BOT_MTBS) {
+    int n = bot.getUpdates(bot.last_message_received + 1);
+    while (n) {
+      handleMessages(n);
+      n = bot.getUpdates(bot.last_message_received + 1);
+    }
+    botLast = millis();
+  }
+
+  server.handleClient();
+}

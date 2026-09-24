@@ -1,0 +1,135 @@
+#include <ESP8266WiFi.h>
+#include <WiFiClientSecure.h>
+#include <ESP8266HTTPClient.h>
+#include <UniversalTelegramBot.h>
+#include <LiquidCrystal_I2C.h>
+#include <Servo.h>
+
+// ===== Network =====
+const char* ssid = "YOUR_WIFI";
+const char* password = "YOUR_PASS";
+String serverURL = "http://YOUR_PC_IP:3000/log";
+String BOT_TOKEN = "YOUR_BOT_TOKEN";
+String CHAT_ID   = "YOUR_CHAT_ID";
+
+WiFiClientSecure client;
+UniversalTelegramBot bot(BOT_TOKEN, client);
+
+// ===== Hardware =====
+#define SERVO_PIN D6
+#define BUTTON_PIN D5
+
+Servo lockServo;
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// ===== State =====
+int correctPin = 0;
+bool waiting = false;
+
+// ===== Log Sender =====
+void sendLog(String event) {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  HTTPClient http;
+  http.begin(serverURL);
+  http.addHeader("Content-Type", "application/json");
+
+  String body = "{\"event\":\"" + event + "\"}";
+  http.POST(body);
+  http.end();
+}
+
+// ===== Challenge =====
+void sendChallenge() {
+  correctPin = random(100, 999);
+  int a = random(100, 999);
+  int b = random(100, 999);
+
+  int options[3] = {correctPin, a, b};
+  for (int i = 0; i < 3; i++) {
+    int r = random(0, 3);
+    int t = options[i];
+    options[i] = options[r];
+    options[r] = t;
+  }
+
+  lcd.clear();
+  lcd.print("PIN:");
+  lcd.setCursor(0, 1);
+  lcd.print(correctPin);
+
+  String keyboard = "[[\"" + String(options[0]) + "\"],[\"" +
+                    String(options[1]) + "\"],[\"" +
+                    String(options[2]) + "\"]]";
+
+  bot.sendMessageWithReplyKeyboard(CHAT_ID, "Select PIN", "", keyboard, true);
+  waiting = true;
+}
+
+// ===== Telegram Check =====
+void checkTelegram() {
+  int n = bot.getUpdates(bot.last_message_received + 1);
+
+  while (n) {
+    for (int i = 0; i < n; i++) {
+      if (!waiting) continue;
+
+      String text = bot.messages[i].text;
+
+      if (text.toInt() == correctPin) {
+        lcd.clear();
+        lcd.print("Access Granted");
+        bot.sendMessage(CHAT_ID, "Access Granted", "");
+        sendLog("Access Granted");
+
+        lockServo.write(180);
+        delay(5000);
+        lockServo.write(0);
+      } else {
+        lcd.clear();
+        lcd.print("Access Denied");
+        bot.sendMessage(CHAT_ID, "Access Denied", "");
+        sendLog("Access Denied");
+      }
+
+      delay(2000);
+      lcd.clear();
+      lcd.print("Press Button");
+      waiting = false;
+      break;
+    }
+    n = bot.getUpdates(bot.last_message_received + 1);
+  }
+}
+
+// ===== Setup =====
+void setup() {
+  Serial.begin(115200);
+
+  lockServo.attach(SERVO_PIN);
+  lockServo.write(0);
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  lcd.init();
+  lcd.backlight();
+  lcd.print("Connecting...");
+
+  WiFi.begin(ssid, password);
+  client.setInsecure();
+
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+
+  lcd.clear();
+  lcd.print("SecureIT Ready");
+}
+
+// ===== Loop =====
+void loop() {
+  if (digitalRead(BUTTON_PIN) == LOW && !waiting) {
+    delay(200);
+    sendChallenge();
+  }
+
+  checkTelegram();
+}
